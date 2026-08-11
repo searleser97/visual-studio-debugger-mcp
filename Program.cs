@@ -20,13 +20,14 @@ builder.Services
         options.ServerInfo = new Implementation
         {
             Name = "visual-studio-debugger",
-            Version = "1.0.0"
+            Version = "0.2.0"
         };
         options.ServerInstructions =
             "Generic Visual Studio debugger automation for Windows. Select a Visual Studio instance, " +
-            "build or start debugging, manage breakpoints, wait for stops, inspect stack frames and " +
-            "variables, evaluate expressions, inspect exceptions, step, continue, pause, attach, and stop. " +
-            "Every EnvDTE operation runs in an isolated timeout-bounded worker process.";
+            "build or start debugging, manage breakpoints, poll status, inspect stack frames and variables, " +
+            "evaluate expressions, inspect exceptions, step, continue, pause, attach, and stop. Long-running " +
+            "state changes are initiated asynchronously and observed through short status probes. Every " +
+            "EnvDTE operation runs in an isolated timeout-bounded worker process.";
     })
     .WithStdioServerTransport()
     .WithTools<VisualStudioTools>();

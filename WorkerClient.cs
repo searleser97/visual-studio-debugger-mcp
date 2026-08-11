@@ -7,8 +7,6 @@ namespace VisualStudioDebuggerMcp;
 
 internal sealed class WorkerClient
 {
-    private const int StateProbeTimeoutSeconds = 20;
-
     private readonly object targetLock = new();
     private string? solutionPattern;
     private int? visualStudioProcessId;
@@ -107,106 +105,6 @@ internal sealed class WorkerClient
         }
 
         return PrettyPrint(stdout);
-    }
-
-    public async Task<string> WaitForDebugModeAsync(
-        string expectedMode,
-        int timeoutSeconds,
-        int pollMilliseconds,
-        CancellationToken cancellationToken)
-    {
-        var validMode = new[] { "Run", "Break", "Design" }
-            .FirstOrDefault(mode =>
-                string.Equals(mode, expectedMode, StringComparison.OrdinalIgnoreCase));
-        if (validMode is null)
-        {
-            throw new ArgumentException(
-                "Expected debugger mode must be Run, Break, or Design.",
-                nameof(expectedMode));
-        }
-
-        if (timeoutSeconds < 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(timeoutSeconds),
-                "Timeout must be zero or greater.");
-        }
-
-        if (pollMilliseconds < 1)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(pollMilliseconds),
-                "Polling interval must be greater than zero.");
-        }
-
-        var deadline = timeoutSeconds > 0
-            ? DateTime.UtcNow.AddSeconds(timeoutSeconds)
-            : (DateTime?)null;
-        var sawBuildInProgress = false;
-
-        while (deadline is null || DateTime.UtcNow < deadline)
-        {
-            var probeTimeoutSeconds = deadline is null
-                ? StateProbeTimeoutSeconds
-                : Math.Max(
-                    1,
-                    Math.Min(
-                        StateProbeTimeoutSeconds,
-                        (int)Math.Ceiling((deadline.Value - DateTime.UtcNow).TotalSeconds)));
-            var stateJson = await InvokeAsync(
-                "get_state",
-                timeoutSeconds: probeTimeoutSeconds,
-                cancellationToken: cancellationToken);
-            var state = JsonNode.Parse(stateJson)?.AsObject()
-                ?? throw new InvalidOperationException(
-                    "Visual Studio state probe returned invalid JSON.");
-            var buildState = state["buildState"]?.GetValue<string>();
-            if (string.Equals(
-                buildState,
-                "vsBuildStateInProgress",
-                StringComparison.Ordinal))
-            {
-                sawBuildInProgress = true;
-            }
-
-            var failedProjects = state["lastBuildFailedProjects"]?.GetValue<int>() ?? 0;
-            if (sawBuildInProgress &&
-                string.Equals(buildState, "vsBuildStateDone", StringComparison.Ordinal) &&
-                failedProjects > 0)
-            {
-                throw new InvalidOperationException(
-                    $"Visual Studio build completed with {failedProjects} failed project(s).");
-            }
-
-            var actualMode = state["debugMode"]?.GetValue<string>();
-            if (string.Equals(actualMode, validMode, StringComparison.OrdinalIgnoreCase))
-            {
-                return new JsonObject
-                {
-                    ["debugMode"] = actualMode,
-                    ["reached"] = true,
-                    ["state"] = state
-                }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-            }
-
-            if (string.Equals(validMode, "Run", StringComparison.Ordinal) &&
-                string.Equals(actualMode, "Break", StringComparison.Ordinal))
-            {
-                return new JsonObject
-                {
-                    ["debugMode"] = actualMode,
-                    ["reached"] = false,
-                    ["blocked"] = true,
-                    ["state"] = state
-                }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-            }
-
-            await Task.Delay(pollMilliseconds, cancellationToken);
-        }
-
-        throw new TimeoutException(
-            $"Visual Studio did not reach debugger mode '{expectedMode}' within the configured " +
-            $"{timeoutSeconds}-second limit.");
     }
 
     private static string PrettyPrint(string json)

@@ -5,9 +5,9 @@ Generic Windows MCP server for controlling and inspecting Visual Studio through 
 ## Reliability model
 
 The MCP host does not retain a COM proxy. Each EnvDTE command or state probe runs in a fresh STA
-worker process with a hard timeout. Long-running waits repeat those bounded probes without imposing
-an overall deadline. A hung EnvDTE call is terminated without wedging the MCP server. A named
-cross-process mutex prevents concurrent workers from overwhelming Visual Studio.
+worker process with a hard timeout. Callers poll short status tools instead of holding long-running
+wait requests. A hung EnvDTE call is terminated without wedging the MCP server. A named cross-process
+mutex prevents concurrent workers from overwhelming Visual Studio.
 
 The global Copilot registration is:
 

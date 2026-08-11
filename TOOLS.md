@@ -6,13 +6,12 @@ generic usage sequences; it is not a second schema source.
 ## Open and connect
 
 ```text
-open_visual_studio(
+start_visual_studio(
   visualStudioExecutable="C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
-  solutionPath="C:\repos\sample\Sample.sln",
-  solutionPattern="*Sample.sln")
+  solutionPath="C:\repos\sample\Sample.sln")
 ```
 
-For an already-open instance:
+Poll `list_visual_studio_instances` until the solution appears, then connect:
 
 ```text
 list_visual_studio_instances()
@@ -36,16 +35,18 @@ may temporarily reject automation calls while busy; those probes return `Running
 `buildState="VisualStudioBusy"` instead of failing.
 
 `start_debugging` only issues the launch command. Observe Visual Studio and application readiness
-with separate tools:
+with separate short status calls:
 
 ```text
-wait_for_debug_mode(debugMode="Run")
-wait_for_ports(ports=[5000])
+get_visual_studio_state()
+get_port_status(ports=[5000])
 ```
 
-Both waits are state-driven and have no default deadline.
-Each Visual Studio state probe remains bounded. If Visual Studio enters Break while waiting for
-Run, `wait_for_debug_mode` returns `blocked=true` so the caller can inspect or continue the stop.
+Poll from the client until the requested state is reached. This keeps every MCP request short and
+avoids transport deadlines.
+
+`stop_debugging`, `pause_execution`, and the three stepping tools also return after initiating the
+action. Poll `get_visual_studio_state` before issuing the next debugger command.
 
 ## Breakpoint workflow
 
@@ -55,10 +56,7 @@ set_breakpoint(
   line=42,
   condition="request != null")
 
-wait_for_break(
-  timeoutSeconds=300,
-  autoContinueAllExceptionBreaks=false,
-  expectedExceptionPatterns=["System.OperationCanceledException"])
+get_visual_studio_state()
 
 inspect(
   expressions=["request.Path", "response.StatusCode"],
@@ -76,7 +74,7 @@ set_exception_settings(
   breakWhenThrown=true,
   breakWhenUserUnhandled=true)
 
-wait_for_break(timeoutSeconds=300)
+get_visual_studio_state()
 get_current_exception()
 get_stack_trace()
 get_variables(frameIndex=1)

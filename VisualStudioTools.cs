@@ -26,34 +26,22 @@ internal sealed class VisualStudioTools
         return await client.InvokeAsync("get_state", cancellationToken: ct);
     }
 
-    [McpServerTool(Name = "open_visual_studio")]
-    [Description(
-        "Starts Visual Studio and opens a solution. " +
-        "Waits until the instance is available through automation.")]
-    public static async Task<string> Open(
+    [McpServerTool(Name = "start_visual_studio")]
+    [Description("Starts Visual Studio with a solution and returns immediately.")]
+    public static Task<string> StartVisualStudio(
         WorkerClient client,
         [Description("Absolute path to devenv.exe.")] string visualStudioExecutable,
         [Description("Absolute path to a .sln or .slnx file.")] string solutionPath,
-        [Description("Optional wildcard used to identify the opened solution. Defaults to the solution filename.")] string? solutionPattern = null,
-        [Description("Disable Visual Studio Just My Code after opening.")] bool disableJustMyCode = false,
-        [Description("Maximum seconds to wait for Visual Studio and the solution to initialize.")] int timeoutSeconds = 180,
         CancellationToken ct = default)
-    {
-        var effectivePattern = solutionPattern ?? $"*{Path.GetFileName(solutionPath)}";
-        client.SetTarget(effectivePattern, null);
-        return await client.InvokeAsync(
-            "open_visual_studio",
+        => client.InvokeAsync(
+            "start_visual_studio",
             new JsonObject
             {
                 ["visualStudioExecutable"] = visualStudioExecutable,
-                ["solutionPath"] = solutionPath,
-                ["solutionPattern"] = effectivePattern,
-                ["disableJustMyCode"] = disableJustMyCode,
-                ["timeoutSeconds"] = timeoutSeconds
+                ["solutionPath"] = solutionPath
             },
-            timeoutSeconds + 30,
+            includeTarget: false,
             cancellationToken: ct);
-    }
 
     [McpServerTool(Name = "close_visual_studio")]
     [Description("Stops debugging and closes the selected Visual Studio instance.")]
@@ -125,19 +113,6 @@ internal sealed class VisualStudioTools
             timeoutSeconds: 60,
             cancellationToken: ct);
 
-    [McpServerTool(Name = "wait_for_debug_mode", ReadOnly = true)]
-    [Description(
-        "Waits for Visual Studio to reach a debugger mode. Each state probe is isolated and " +
-        "bounded, while the overall wait has no deadline by default. Waiting for Run returns a " +
-        "blocked result if Visual Studio enters Break and requires debugger action.")]
-    public static Task<string> WaitForDebugMode(
-        WorkerClient client,
-        [Description("Expected debugger mode: Run, Break, or Design.")] string debugMode = "Run",
-        [Description("Optional maximum seconds to wait. Use 0 (default) for no deadline.")] int timeoutSeconds = 0,
-        [Description("Polling interval in milliseconds.")] int pollMilliseconds = 1000,
-        CancellationToken ct = default) =>
-        client.WaitForDebugModeAsync(debugMode, timeoutSeconds, pollMilliseconds, ct);
-
     [McpServerTool(Name = "get_port_status", ReadOnly = true)]
     [Description("Checks whether one or more TCP ports are currently ready.")]
     public static Task<string> GetPortStatus(
@@ -158,39 +133,10 @@ internal sealed class VisualStudioTools
             includeTarget: false,
             cancellationToken: ct);
 
-    [McpServerTool(Name = "wait_for_ports", ReadOnly = true)]
-    [Description(
-        "Waits until all or any requested TCP ports are ready. The default wait is state-driven " +
-        "with no deadline.")]
-    public static Task<string> WaitForPorts(
-        WorkerClient client,
-        [Description("TCP ports to wait for.")] int[] ports,
-        [Description("Host name or IP address.")] string host = "127.0.0.1",
-        [Description("Require every port; when false, return after any port is ready.")] bool requireAll = true,
-        [Description("Optional maximum seconds to wait. Use 0 (default) for no deadline.")] int timeoutSeconds = 0,
-        [Description("Polling interval in milliseconds.")] int pollMilliseconds = 1000,
-        [Description("Per-port connection timeout for non-local hosts.")] int connectTimeoutMilliseconds = 500,
-        CancellationToken ct = default) =>
-        client.InvokeAsync(
-            "wait_for_ports",
-            new JsonObject
-            {
-                ["host"] = host,
-                ["ports"] = new JsonArray(
-                    ports.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
-                ["requireAll"] = requireAll,
-                ["timeoutSeconds"] = timeoutSeconds,
-                ["pollMilliseconds"] = pollMilliseconds,
-                ["connectTimeoutMilliseconds"] = connectTimeoutMilliseconds
-            },
-            timeoutSeconds > 0 ? timeoutSeconds + 15 : 0,
-            includeTarget: false,
-            cancellationToken: ct);
-
     [McpServerTool(Name = "stop_debugging")]
-    [Description("Stops the active Visual Studio debugging session and waits for Design mode.")]
+    [Description("Requests that the active Visual Studio debugging session stop and returns immediately.")]
     public static Task<string> StopDebugging(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("stop_debugging", timeoutSeconds: 120, cancellationToken: ct);
+        client.InvokeAsync("stop_debugging", cancellationToken: ct);
 
     [McpServerTool(Name = "set_breakpoint")]
     [Description(
@@ -230,32 +176,6 @@ internal sealed class VisualStudioTools
     [Description("Lists breakpoints in the selected Visual Studio instance.")]
     public static Task<string> ListBreakpoints(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("list_breakpoints", cancellationToken: ct);
-
-    [McpServerTool(Name = "wait_for_break", ReadOnly = true)]
-    [Description(
-        "Waits until Visual Studio pauses. Profile-configured expected exception breaks may be " +
-        "automatically continued; real breakpoint, step, and user-break stops are returned.")]
-    public static Task<string> WaitForBreak(
-        WorkerClient client,
-        [Description("Optional maximum seconds to wait. Use 0 (default) for no deadline.")] int timeoutSeconds = 0,
-        [Description("Polling interval in milliseconds.")] int pollMilliseconds = 500,
-        [Description("Automatically continue every exception-triggered stop.")] bool autoContinueAllExceptionBreaks = false,
-        [Description("Exception type wildcard patterns to auto-continue, such as System.Net.Http.*.")] string[]? expectedExceptionPatterns = null,
-        CancellationToken ct = default) =>
-        client.InvokeAsync(
-            "wait_for_break",
-            new JsonObject
-            {
-                ["timeoutSeconds"] = timeoutSeconds,
-                ["pollMilliseconds"] = pollMilliseconds,
-                ["autoContinueAllExceptionBreaks"] = autoContinueAllExceptionBreaks,
-                ["expectedExceptionPatterns"] = new JsonArray(
-                    (expectedExceptionPatterns ?? [])
-                    .Select(value => (JsonNode?)JsonValue.Create(value))
-                    .ToArray())
-            },
-            timeoutSeconds > 0 ? timeoutSeconds + 15 : 0,
-            cancellationToken: ct);
 
     [McpServerTool(Name = "get_stack_trace", ReadOnly = true)]
     [Description("Returns the current thread's stack frames while Visual Studio is paused.")]
@@ -321,24 +241,24 @@ internal sealed class VisualStudioTools
         client.InvokeAsync("continue", cancellationToken: ct);
 
     [McpServerTool(Name = "pause_execution")]
-    [Description("Breaks a running debuggee, equivalent to Visual Studio Break All.")]
+    [Description("Requests Visual Studio Break All and returns immediately.")]
     public static Task<string> Pause(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("pause", timeoutSeconds: 120, cancellationToken: ct);
+        client.InvokeAsync("pause", cancellationToken: ct);
 
     [McpServerTool(Name = "step_over")]
-    [Description("Steps over the current statement and waits for the next debugger stop.")]
+    [Description("Initiates Step Over and returns immediately.")]
     public static Task<string> StepOver(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("step_over", timeoutSeconds: 180, cancellationToken: ct);
+        client.InvokeAsync("step_over", cancellationToken: ct);
 
     [McpServerTool(Name = "step_into")]
-    [Description("Steps into the current statement and waits for the next debugger stop.")]
+    [Description("Initiates Step Into and returns immediately.")]
     public static Task<string> StepInto(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("step_into", timeoutSeconds: 180, cancellationToken: ct);
+        client.InvokeAsync("step_into", cancellationToken: ct);
 
     [McpServerTool(Name = "step_out")]
-    [Description("Steps out of the current function and waits for the next debugger stop.")]
+    [Description("Initiates Step Out and returns immediately.")]
     public static Task<string> StepOut(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("step_out", timeoutSeconds: 180, cancellationToken: ct);
+        client.InvokeAsync("step_out", cancellationToken: ct);
 
     [McpServerTool(Name = "attach_to_process")]
     [Description("Attaches the selected Visual Studio debugger to an existing local process ID.")]

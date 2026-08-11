@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO.Enumeration;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -17,7 +16,7 @@ internal static class VisualStudioOperations
     private const int ExpressionTimeoutMilliseconds = 5000;
 
     public static bool UsesEnvDte(JsonObject request) =>
-        request["operation"]?.GetValue<string>() is not ("get_port_status" or "wait_for_ports");
+        request["operation"]?.GetValue<string>() is not ("start_visual_studio" or "get_port_status");
 
     public static string Execute(JsonObject request)
     {
@@ -28,20 +27,18 @@ internal static class VisualStudioOperations
         return operation switch
         {
             "list_instances" => ListInstances(),
-            "open_visual_studio" => OpenVisualStudio(arguments),
+            "start_visual_studio" => StartVisualStudio(arguments),
             "get_state" => WithInstance(arguments, GetState),
             "apply_debugger_settings" => WithInstance(arguments, ApplyDebuggerSettings),
             "start_build" => WithInstance(arguments, StartBuild),
             "get_build_status" => WithInstance(arguments, GetBuildStatus),
             "start_debugging" => WithInstance(arguments, StartDebugging),
             "get_port_status" => GetPortStatus(arguments).ToJsonString(),
-            "wait_for_ports" => WaitForPorts(arguments).ToJsonString(),
             "stop_debugging" => WithInstance(arguments, StopDebugging),
             "close_visual_studio" => WithInstance(arguments, CloseVisualStudio),
             "set_breakpoint" => WithInstance(arguments, SetBreakpoint),
             "remove_breakpoint" => WithInstance(arguments, RemoveBreakpoint),
             "list_breakpoints" => WithInstance(arguments, ListBreakpoints),
-            "wait_for_break" => WaitForBreak(arguments),
             "get_stack_trace" => WithInstance(arguments, GetStackTrace),
             "get_variables" => WithInstance(arguments, GetVariables),
             "evaluate_expression" => WithInstance(arguments, EvaluateExpression),
@@ -95,12 +92,10 @@ internal static class VisualStudioOperations
         return new JsonObject { ["instances"] = instances }.ToJsonString();
     }
 
-    private static string OpenVisualStudio(JsonObject arguments)
+    private static string StartVisualStudio(JsonObject arguments)
     {
         var executable = RequiredString(arguments, "visualStudioExecutable");
         var solution = RequiredString(arguments, "solutionPath");
-        var solutionPattern = arguments["solutionPattern"]?.GetValue<string>()
-            ?? $"*{Path.GetFileName(solution)}";
         if (!File.Exists(executable))
         {
             throw new FileNotFoundException("The configured Visual Studio executable was not found.", executable);
@@ -117,33 +112,13 @@ internal static class VisualStudioOperations
             Arguments = $"\"{solution}\""
         }) ?? throw new InvalidOperationException("Visual Studio did not start.");
 
-        var timeoutSeconds = arguments["timeoutSeconds"]?.GetValue<int>() ?? 180;
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-        while (DateTime.UtcNow < deadline)
+        return new JsonObject
         {
-            System.Threading.Thread.Sleep(1000);
-            try
-            {
-                var instance = VsConnection.Find(solutionPattern, processId: null);
-                ApplyDebuggerSettings(
-                    instance.Dte,
-                    arguments["disableJustMyCode"]?.GetValue<bool>() ?? false);
-                return new JsonObject
-                {
-                    ["opened"] = true,
-                    ["processId"] = instance.ProcessId,
-                    ["solution"] = instance.Solution
-                }.ToJsonString();
-            }
-            catch
-            {
-                // Visual Studio registers in the ROT after its shell and solution are initialized.
-            }
-        }
-
-        throw new TimeoutException(
-            $"Visual Studio started as PID {process.Id}, but its solution did not become automation-ready " +
-            $"within {timeoutSeconds} seconds.");
+            ["started"] = true,
+            ["processId"] = process.Id,
+            ["solutionPath"] = solution,
+            ["solutionPattern"] = $"*{Path.GetFileName(solution)}"
+        }.ToJsonString();
     }
 
     private static JsonNode GetState(VisualStudioInstance instance, JsonObject arguments)
@@ -293,45 +268,15 @@ internal static class VisualStudioOperations
         return new JsonObject { ["ports"] = statuses };
     }
 
-    private static JsonNode WaitForPorts(JsonObject arguments)
-    {
-        var timeoutSeconds = arguments["timeoutSeconds"]?.GetValue<int>() ?? 0;
-        var pollMilliseconds = arguments["pollMilliseconds"]?.GetValue<int>() ?? 1000;
-        var requireAll = arguments["requireAll"]?.GetValue<bool>() ?? true;
-        var deadline = timeoutSeconds > 0
-            ? DateTime.UtcNow.AddSeconds(timeoutSeconds)
-            : (DateTime?)null;
-
-        while (deadline is null || DateTime.UtcNow < deadline)
-        {
-            var status = GetPortStatus(arguments).AsObject();
-            var readiness = status["ports"]!.AsArray()
-                .Select(port => port!["ready"]!.GetValue<bool>())
-                .ToArray();
-            if ((requireAll && readiness.All(value => value)) ||
-                (!requireAll && readiness.Any(value => value)))
-            {
-                status["ready"] = true;
-                status["requireAll"] = requireAll;
-                return status;
-            }
-
-            System.Threading.Thread.Sleep(pollMilliseconds);
-        }
-
-        throw new TimeoutException(
-            $"Requested ports did not become ready within the configured {timeoutSeconds}-second limit.");
-    }
-
     private static JsonNode StopDebugging(VisualStudioInstance instance, JsonObject arguments)
     {
         var debugger = (Debugger2)instance.Dte.Debugger;
         if (debugger.CurrentMode != dbgDebugMode.dbgDesignMode)
         {
-            debugger.Stop(WaitForDesignMode: true);
+            debugger.Stop(WaitForDesignMode: false);
         }
 
-        return new JsonObject { ["stopped"] = true };
+        return new JsonObject { ["stopRequested"] = true };
     }
 
     private static JsonNode CloseVisualStudio(VisualStudioInstance instance, JsonObject arguments)
@@ -422,55 +367,6 @@ internal static class VisualStudioOperations
         }
 
         return new JsonObject { ["breakpoints"] = breakpoints };
-    }
-
-    private static string WaitForBreak(JsonObject arguments)
-    {
-        var timeoutSeconds = arguments["timeoutSeconds"]?.GetValue<int>() ?? 0;
-        var pollMilliseconds = arguments["pollMilliseconds"]?.GetValue<int>() ?? 500;
-        var deadline = timeoutSeconds > 0
-            ? DateTime.UtcNow.AddSeconds(timeoutSeconds)
-            : (DateTime?)null;
-
-        while (deadline is null || DateTime.UtcNow < deadline)
-        {
-            VisualStudioInstance? instance = null;
-            try
-            {
-                instance = VsConnection.Find(
-                    arguments["solutionPattern"]?.GetValue<string>(),
-                    arguments["visualStudioProcessId"]?.GetValue<int>());
-                EnsureVisualStudioIsRunning(instance);
-                var debugger = (Debugger2)instance.Dte.Debugger;
-                if (debugger.CurrentMode == dbgDebugMode.dbgBreakMode)
-                {
-                    var reason = debugger.LastBreakReason;
-                    var exception = ReadCurrentException(debugger);
-                    if (ShouldAutoContinueException(reason, exception, arguments))
-                    {
-                        debugger.Go(WaitForBreakOrEnd: false);
-                    }
-                    else
-                    {
-                        return new JsonObject
-                        {
-                            ["debugMode"] = "Break",
-                            ["breakReason"] = reason.ToString(),
-                            ["exception"] = exception
-                        }.ToJsonString();
-                    }
-                }
-            }
-            catch (System.Runtime.InteropServices.COMException)
-            {
-                // Visual Studio can reject automation briefly while transitioning modes.
-            }
-
-            System.Threading.Thread.Sleep(pollMilliseconds);
-        }
-
-        throw new TimeoutException(
-            $"Visual Studio did not enter Break mode within the configured {timeoutSeconds}-second limit.");
     }
 
     private static JsonNode GetStackTrace(VisualStudioInstance instance, JsonObject arguments)
@@ -570,10 +466,10 @@ internal static class VisualStudioOperations
         var debugger = (Debugger2)instance.Dte.Debugger;
         if (debugger.CurrentMode == dbgDebugMode.dbgRunMode)
         {
-            debugger.Break(WaitForBreakMode: true);
+            debugger.Break(WaitForBreakMode: false);
         }
 
-        return new JsonObject { ["paused"] = debugger.CurrentMode == dbgDebugMode.dbgBreakMode };
+        return new JsonObject { ["pauseRequested"] = true };
     }
 
     private static JsonNode Step(VisualStudioInstance instance, string kind)
@@ -582,17 +478,17 @@ internal static class VisualStudioOperations
         switch (kind)
         {
             case "over":
-                debugger.StepOver(WaitForBreakOrEnd: true);
+                debugger.StepOver(WaitForBreakOrEnd: false);
                 break;
             case "into":
-                debugger.StepInto(WaitForBreakOrEnd: true);
+                debugger.StepInto(WaitForBreakOrEnd: false);
                 break;
             case "out":
-                debugger.StepOut(WaitForBreakOrEnd: true);
+                debugger.StepOut(WaitForBreakOrEnd: false);
                 break;
         }
 
-        return new JsonObject { ["step"] = kind, ["completed"] = true };
+        return new JsonObject { ["step"] = kind, ["started"] = true };
     }
 
     private static JsonNode AttachToProcess(VisualStudioInstance instance, JsonObject arguments)
@@ -672,34 +568,6 @@ internal static class VisualStudioOperations
                 return;
             }
         }
-    }
-
-    private static bool ShouldAutoContinueException(
-        dbgEventReason reason,
-        JsonObject exception,
-        JsonObject arguments)
-    {
-        if (reason is not (dbgEventReason.dbgEventReasonExceptionThrown or
-            dbgEventReason.dbgEventReasonExceptionNotHandled))
-        {
-            return false;
-        }
-
-        if (arguments["autoContinueAllExceptionBreaks"]?.GetValue<bool>() == true)
-        {
-            return true;
-        }
-
-        var type = exception["type"]?.GetValue<string>() ?? string.Empty;
-        if (arguments["expectedExceptionPatterns"] is not JsonArray patterns)
-        {
-            return false;
-        }
-
-        return patterns
-            .Select(pattern => pattern?.GetValue<string>())
-            .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
-            .Any(pattern => FileSystemName.MatchesSimpleExpression(pattern!, type, ignoreCase: true));
     }
 
     private static JsonObject ReadCurrentException(Debugger2 debugger)
