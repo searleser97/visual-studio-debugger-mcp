@@ -31,7 +31,8 @@ internal static class VisualStudioOperations
             "open_visual_studio" => OpenVisualStudio(arguments),
             "get_state" => WithInstance(arguments, GetState),
             "apply_debugger_settings" => WithInstance(arguments, ApplyDebuggerSettings),
-            "build_solution" => WithInstance(arguments, BuildSolution),
+            "start_build" => WithInstance(arguments, StartBuild),
+            "get_build_status" => WithInstance(arguments, GetBuildStatus),
             "start_debugging" => WithInstance(arguments, StartDebugging),
             "get_port_status" => GetPortStatus(arguments).ToJsonString(),
             "wait_for_ports" => WaitForPorts(arguments).ToJsonString(),
@@ -197,17 +198,60 @@ internal static class VisualStudioOperations
         };
     }
 
-    private static JsonNode BuildSolution(VisualStudioInstance instance, JsonObject arguments)
+    private static JsonNode StartBuild(VisualStudioInstance instance, JsonObject arguments)
     {
         ActivateConfiguration(
             instance.Dte,
             arguments["solutionConfiguration"]?.GetValue<string>());
-        instance.Dte.Solution.SolutionBuild.Build(WaitForBuildToFinish: true);
+        instance.Dte.Solution.SolutionBuild.Build(WaitForBuildToFinish: false);
         return new JsonObject
         {
-            ["buildState"] = instance.Dte.Solution.SolutionBuild.BuildState.ToString(),
-            ["failedProjects"] = instance.Dte.Solution.SolutionBuild.LastBuildInfo
+            ["started"] = true
         };
+    }
+
+    private static JsonNode GetBuildStatus(VisualStudioInstance instance, JsonObject arguments)
+    {
+        _ = arguments;
+        try
+        {
+            var solutionBuild = instance.Dte.Solution.SolutionBuild;
+            var buildState = solutionBuild.BuildState;
+            var failedProjects = 0;
+            try
+            {
+                failedProjects = solutionBuild.LastBuildInfo;
+            }
+            catch (COMException)
+            {
+                // Visual Studio throws before the solution has completed its first build.
+            }
+
+            var status = buildState switch
+            {
+                vsBuildState.vsBuildStateInProgress => "Running",
+                vsBuildState.vsBuildStateDone when failedProjects > 0 => "Failed",
+                vsBuildState.vsBuildStateDone => "Succeeded",
+                _ => "NotStarted"
+            };
+
+            return new JsonObject
+            {
+                ["status"] = status,
+                ["buildState"] = buildState.ToString(),
+                ["failedProjects"] = failedProjects
+            };
+        }
+        catch (COMException exception) when (
+            exception.HResult is unchecked((int)0x80010001) or unchecked((int)0x8001010A))
+        {
+            return new JsonObject
+            {
+                ["status"] = "Running",
+                ["buildState"] = "VisualStudioBusy",
+                ["failedProjects"] = 0
+            };
+        }
     }
 
     private static JsonNode StartDebugging(VisualStudioInstance instance, JsonObject arguments)

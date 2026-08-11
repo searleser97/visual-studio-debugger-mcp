@@ -22,13 +22,18 @@ connect_to_visual_studio(solutionPattern="*Sample.sln")
 ## Build and launch
 
 ```text
-build_solution(solutionConfiguration="Debug")
+start_build(solutionConfiguration="Debug")
+get_build_status()
 start_debugging(
   startupProjects=["src\Sample.Web\Sample.Web.csproj"],
   solutionConfiguration="Debug",
   launchCommand="Debug.Start",
   disableJustMyCode=false)
 ```
+
+Poll `get_build_status` with separate calls until it returns `Succeeded` or `Failed`. Visual Studio
+may temporarily reject automation calls while busy; those probes return `Running` with
+`buildState="VisualStudioBusy"` instead of failing.
 
 `start_debugging` only issues the launch command. Observe Visual Studio and application readiness
 with separate tools:

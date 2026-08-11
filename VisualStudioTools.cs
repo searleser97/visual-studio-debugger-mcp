@@ -72,17 +72,21 @@ internal sealed class VisualStudioTools
     public static Task<string> GetState(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("get_state", cancellationToken: ct);
 
-    [McpServerTool(Name = "build_solution")]
-    [Description("Builds the selected solution through Visual Studio and waits for completion.")]
-    public static Task<string> Build(
+    [McpServerTool(Name = "start_build")]
+    [Description("Starts building the selected solution through Visual Studio and returns immediately.")]
+    public static Task<string> StartBuild(
         WorkerClient client,
         [Description("Optional Visual Studio solution configuration name, such as Debug.")] string? solutionConfiguration = null,
         CancellationToken ct = default) =>
         client.InvokeAsync(
-            "build_solution",
+            "start_build",
             new JsonObject { ["solutionConfiguration"] = solutionConfiguration },
-            timeoutSeconds: 900,
             cancellationToken: ct);
+
+    [McpServerTool(Name = "get_build_status", ReadOnly = true)]
+    [Description("Returns whether the selected Visual Studio solution build has not started, is running, succeeded, or failed.")]
+    public static Task<string> GetBuildStatus(WorkerClient client, CancellationToken ct) =>
+        client.InvokeAsync("get_build_status", cancellationToken: ct);
 
     [McpServerTool(Name = "apply_debugger_settings")]
     [Description("Applies generic Visual Studio debugger settings to the selected instance.")]
