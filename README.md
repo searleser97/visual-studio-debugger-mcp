@@ -36,8 +36,9 @@ building from source:
 .\install.ps1
 ```
 
-The installer prints the executable path to use as the MCP `command`. The machine must have the
-.NET 8 runtime and Visual Studio installed.
+The repository's `start.cmd` automatically prefers the installed executable under
+`%LOCALAPPDATA%\VisualStudioDebuggerMcp`, falling back to a source-built Release executable. The
+machine must have the .NET 8 runtime and Visual Studio installed.
 
 Maintainers create a release by pushing a `v*` tag. The release workflow publishes the complete
 runtime directory; generated `bin/` output remains excluded from source control.
