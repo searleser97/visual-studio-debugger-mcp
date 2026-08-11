@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Enumeration;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EnvDTE;
@@ -149,12 +150,22 @@ internal static class VisualStudioOperations
         var dte = instance.Dte;
         var debugger = (Debugger2)dte.Debugger;
         var mode = debugger.CurrentMode;
+        var lastBuildFailedProjects = 0;
+        try
+        {
+            lastBuildFailedProjects = dte.Solution.SolutionBuild.LastBuildInfo;
+        }
+        catch (COMException)
+        {
+            // Visual Studio throws before the solution has completed its first build.
+        }
+
         var state = new JsonObject
         {
             ["processId"] = instance.ProcessId,
             ["solution"] = instance.Solution,
             ["buildState"] = dte.Solution.SolutionBuild.BuildState.ToString(),
-            ["lastBuildFailedProjects"] = dte.Solution.SolutionBuild.LastBuildInfo,
+            ["lastBuildFailedProjects"] = lastBuildFailedProjects,
             ["debugMode"] = mode switch
             {
                 dbgDebugMode.dbgBreakMode => "Break",
