@@ -7,9 +7,35 @@ generic usage sequences; it is not a second schema source.
 
 ```text
 open_visual_studio(
-  visualStudioExecutable="C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
   solutionPath="C:\repos\sample\Sample.sln")
 ```
+
+The solution must be an absolute existing path. The server discovers Visual Studio through
+Installer's `vswhere.exe`, including prerelease installations, and then checks standard
+`Program Files\Microsoft Visual Studio\<version>\<edition>\Common7\IDE` locations.
+
+Prefer this tool over launching `devenv.exe` directly. It validates the solution, reports Visual
+Studio's launcher-process handoff, and returns the process ID and next MCP operation needed to
+establish a debugger target.
+
+Expected validation, discovery, and Windows launch failures return `started=false` with an error
+code/message, the provided and resolved paths, discovered `devenv.exe` locations, and suggested
+next actions. A successful result identifies the executable as `AutoDiscovered`. Visual Studio may
+hand off to an existing or replacement process. The tool does not suppress additional instances;
+use `list_visual_studio_instances`, `connect_to_visual_studio`, and `close_visual_studio` to manage
+them explicitly.
+
+If automatic discovery cannot find the intended installation, locate `devenv.exe` using the
+returned guidance, then retry through the explicit fallback rather than launching it directly:
+
+```text
+open_visual_studio_with_exe_path(
+  solutionPath="C:\repos\sample\Sample.sln",
+  visualStudioExecutablePath="D:\Visual Studio\Common7\IDE\devenv.exe")
+```
+
+This preserves the same validation, process-handoff guidance, and structured feedback as the
+automatic tool. Do not guess an installation path.
 
 Poll `list_visual_studio_instances` until the solution appears, then connect:
 
@@ -50,6 +76,14 @@ When a modal dialog blocks automation, it returns `automationAvailable=false`, `
 `blockReason="ModalDialog"`, and `windowState.blockingDialogs` with the dialog title, message text,
 and available buttons. This lets callers identify and resolve prompts such as unsupported Hot
 Reload or exception dialogs without waiting for an EnvDTE timeout.
+
+Expected state failures return `success=false` with an error code/message, the requested target,
+EnvDTE-visible instances, native `devenv` processes, and suggested next actions. This distinguishes
+a stale process ID, unmatched or ambiguous target, no running Visual Studio, and temporarily
+unavailable EnvDTE automation without reducing them to a generic MCP error. If the isolated state
+worker itself times out or exits, the host returns the same structured shape with
+`VisualStudioStateTimedOut` or `VisualStudioStateWorkerFailed`; in that case
+`availableInstancesUnavailableReason` explains why only native process diagnostics are present.
 
 After inspecting the reported choices, callers can resolve a prompt explicitly:
 

@@ -11,6 +11,13 @@ internal sealed record VisualStudioInstance(
     string Solution,
     DTE2 Dte);
 
+internal sealed class VisualStudioConnectionException(
+    string code,
+    string message) : InvalidOperationException(message)
+{
+    public string Code { get; } = code;
+}
+
 internal static class VsConnection
 {
     public static VisualStudioInstance Find(string? solutionPattern, int? processId)
@@ -18,7 +25,9 @@ internal static class VsConnection
         var instances = GetAll();
         if (instances.Count == 0)
         {
-            throw new InvalidOperationException("No running Visual Studio instances were found.");
+            throw new VisualStudioConnectionException(
+                "NoVisualStudioInstances",
+                "No running Visual Studio instances were found.");
         }
 
         IEnumerable<VisualStudioInstance> matches = instances;
@@ -44,7 +53,8 @@ internal static class VsConnection
 
         if (selected.Count == 0)
         {
-            throw new InvalidOperationException(
+            throw new VisualStudioConnectionException(
+                "VisualStudioTargetNotFound",
                 $"No Visual Studio instance matched processId='{processId}' " +
                 $"and solutionPattern='{solutionPattern}'. Running instances: {Describe(instances)}");
         }
@@ -54,7 +64,8 @@ internal static class VsConnection
             return instances[0];
         }
 
-        throw new InvalidOperationException(
+        throw new VisualStudioConnectionException(
+            "AmbiguousVisualStudioTarget",
             $"Multiple Visual Studio instances matched. Specify solutionPattern or visualStudioProcessId. " +
             $"Matches: {Describe(selected)}");
     }

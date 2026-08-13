@@ -23,7 +23,7 @@ internal sealed class VisualStudioTools
         CancellationToken ct = default)
     {
         client.SetTarget(solutionPattern, visualStudioProcessId);
-        var state = await client.InvokeAsync("get_state", cancellationToken: ct);
+        var state = await client.InvokeStateAsync(ct);
         var resolvedProcessId =
             JsonNode.Parse(state)?["processId"]?.GetValue<int>() ?? visualStudioProcessId;
         client.SetTarget(solutionPattern, resolvedProcessId);
@@ -31,17 +31,41 @@ internal sealed class VisualStudioTools
     }
 
     [McpServerTool(Name = "open_visual_studio")]
-    [Description("Opens Visual Studio with a solution and returns immediately.")]
+    [Description(
+        "Requests that Windows open a solution in Visual Studio and returns immediately. Visual " +
+        "Studio is discovered automatically through vswhere and standard install locations. On " +
+        "expected input or launch failures, returns started=false with structured diagnostics, " +
+        "discovered Visual Studio executable paths, and next actions. Each call requests a new " +
+        "launch; use list_visual_studio_instances to choose among instances. On success, poll that " +
+        "tool because Visual Studio may hand off to a different process ID.")]
     public static Task<string> OpenVisualStudio(
         WorkerClient client,
-        [Description("Absolute path to devenv.exe.")] string visualStudioExecutable,
         [Description("Absolute path to a .sln or .slnx file.")] string solutionPath,
         CancellationToken ct = default)
         => client.InvokeAsync(
             "open_visual_studio",
             new JsonObject
             {
-                ["visualStudioExecutable"] = visualStudioExecutable,
+                ["solutionPath"] = solutionPath
+            },
+            includeTarget: false,
+            cancellationToken: ct);
+
+    [McpServerTool(Name = "open_visual_studio_with_exe_path")]
+    [Description(
+        "Fallback for opening a solution with a specific devenv.exe when automatic discovery by " +
+        "open_visual_studio could not find the intended installation. Returns the same structured " +
+        "validation, launch, process-handoff, and recovery details.")]
+    public static Task<string> OpenVisualStudioWithExePath(
+        WorkerClient client,
+        [Description("Absolute path to a .sln or .slnx file.")] string solutionPath,
+        [Description("Absolute path to the selected devenv.exe.")] string visualStudioExecutablePath,
+        CancellationToken ct = default)
+        => client.InvokeAsync(
+            "open_visual_studio",
+            new JsonObject
+            {
+                ["visualStudioExecutable"] = visualStudioExecutablePath,
                 ["solutionPath"] = solutionPath
             },
             includeTarget: false,
@@ -62,9 +86,11 @@ internal sealed class VisualStudioTools
     [McpServerTool(Name = "get_visual_studio_state", ReadOnly = true)]
     [Description(
         "Returns solution, build state, debugger mode, break reason, status-bar text, and any " +
-        "blocking Visual Studio modal dialog with its text and available buttons.")]
+        "blocking Visual Studio modal dialog with its text and available buttons. Expected target, " +
+        "process, or EnvDTE failures return success=false with available instances/processes and " +
+        "actionable next steps.")]
     public static Task<string> GetState(WorkerClient client, CancellationToken ct) =>
-        client.InvokeAsync("get_state", cancellationToken: ct);
+        client.InvokeStateAsync(ct);
 
     [McpServerTool(Name = "click_visual_studio_dialog_button")]
     [Description(

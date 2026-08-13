@@ -23,7 +23,10 @@ builder.Services
             Version = "0.2.0"
         };
         options.ServerInstructions =
-            "Generic Visual Studio debugger automation for Windows. Select a Visual Studio instance, " +
+            "Generic Visual Studio debugger automation for Windows. Open Visual Studio with " +
+            "open_visual_studio, which discovers devenv.exe automatically; use " +
+            "open_visual_studio_with_exe_path only as a fallback after locating a custom " +
+            "installation. Select a Visual Studio instance, " +
             "build or start debugging, manage breakpoints, poll status, inspect stack frames and variables, " +
             "report and resolve blocking modal dialogs, evaluate expressions, inspect exceptions, step, " +
             "continue, pause, attach, and stop. Long-running " +

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -105,6 +106,83 @@ internal sealed class WorkerClient
         }
 
         return PrettyPrint(stdout);
+    }
+
+    public async Task<string> InvokeStateAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await InvokeAsync("get_state", cancellationToken: cancellationToken);
+        }
+        catch (Exception exception) when (
+            exception is TimeoutException or InvalidOperationException or Win32Exception)
+        {
+            string? requestedSolutionPattern;
+            int? requestedProcessId;
+            lock (this.targetLock)
+            {
+                requestedSolutionPattern = this.solutionPattern;
+                requestedProcessId = this.visualStudioProcessId;
+            }
+
+            var timedOut = exception is TimeoutException;
+            return new JsonObject
+            {
+                ["success"] = false,
+                ["debuggerStateAvailable"] = false,
+                ["automationAvailable"] = false,
+                ["error"] = new JsonObject
+                {
+                    ["code"] = timedOut
+                        ? "VisualStudioStateTimedOut"
+                        : "VisualStudioStateWorkerFailed",
+                    ["message"] = exception.Message,
+                    ["exceptionType"] = exception.GetType().Name
+                },
+                ["requestedTarget"] = new JsonObject
+                {
+                    ["visualStudioProcessId"] = requestedProcessId,
+                    ["solutionPattern"] = requestedSolutionPattern
+                },
+                ["availableInstances"] = new JsonArray(),
+                ["availableInstancesUnavailableReason"] =
+                    "The isolated EnvDTE worker did not return a state response.",
+                ["runningVisualStudioProcesses"] = GetRunningVisualStudioProcesses(),
+                ["nextActions"] = new JsonArray(
+                    JsonValue.Create(
+                        timedOut
+                            ? "Retry get_visual_studio_state; another EnvDTE operation or Visual Studio itself may be busy."
+                            : "Call list_visual_studio_instances to verify that the selected Visual Studio instance is still registered."),
+                    JsonValue.Create(
+                        "Inspect Visual Studio for a blocking dialog, then reconnect if the process restarted."))
+            }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
+    }
+
+    private static JsonArray GetRunningVisualStudioProcesses()
+    {
+        var processes = new JsonArray();
+        foreach (var process in Process.GetProcessesByName("devenv"))
+        {
+            using (process)
+            {
+                try
+                {
+                    processes.Add(new JsonObject
+                    {
+                        ["processId"] = process.Id,
+                        ["mainWindowTitle"] = process.MainWindowTitle,
+                        ["responding"] = process.Responding
+                    });
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process exited while its diagnostic details were being read.
+                }
+            }
+        }
+
+        return processes;
     }
 
     private static string PrettyPrint(string json)

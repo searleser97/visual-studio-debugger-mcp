@@ -17,9 +17,9 @@ internal static class VisualStudioOperations
 
     public static bool UsesEnvDte(JsonObject request) =>
         request["operation"]?.GetValue<string>() is not (
-            "open_visual_studio" or
             "get_port_status" or
-            "click_dialog_button");
+            "click_dialog_button" or
+            "open_visual_studio");
 
     public static string Execute(JsonObject request)
     {
@@ -98,31 +98,378 @@ internal static class VisualStudioOperations
 
     private static string OpenVisualStudio(JsonObject arguments)
     {
-        var executable = RequiredString(arguments, "visualStudioExecutable");
-        var solution = RequiredString(arguments, "solutionPath");
-        if (!File.Exists(executable))
+        var solution = RequiredString(arguments, "solutionPath").Trim();
+        var solutionPath = ValidateAbsolutePath(solution);
+        var discoveredExecutablePaths = DiscoverVisualStudioExecutablePaths();
+        var discoveredExecutables = ToJsonArray(discoveredExecutablePaths);
+        var providedExecutable = arguments["visualStudioExecutable"]?.GetValue<string>()?.Trim();
+        var executableWasAutoDiscovered = string.IsNullOrWhiteSpace(providedExecutable);
+        var executable = executableWasAutoDiscovered
+            ? discoveredExecutablePaths.FirstOrDefault()
+            : providedExecutable;
+        var executablePath = executable is null ? null : ValidateAbsolutePath(executable);
+
+        if (solutionPath is null || !File.Exists(solutionPath))
         {
-            throw new FileNotFoundException("The configured Visual Studio executable was not found.", executable);
+            return OpenVisualStudioFailure(
+                "SolutionNotFound",
+                "The solution file was not found. Pass an absolute path to an existing .sln or .slnx file.",
+                "solutionPath",
+                providedExecutable,
+                executablePath,
+                solution,
+                solutionPath,
+                discoveredExecutables,
+                [
+                    "Verify the repository or worktree root and the solution's relative path.",
+                    "Use a .sln or .slnx file that exists on this machine."
+                ]);
         }
 
-        if (!File.Exists(solution))
+        if (!string.Equals(
+                Path.GetExtension(solutionPath),
+                ".sln",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                Path.GetExtension(solutionPath),
+                ".slnx",
+                StringComparison.OrdinalIgnoreCase))
         {
-            throw new FileNotFoundException("The configured solution was not found.", solution);
+            return OpenVisualStudioFailure(
+                "InvalidSolutionFile",
+                "The solution path must point to a .sln or .slnx file.",
+                "solutionPath",
+                providedExecutable,
+                executablePath,
+                solution,
+                solutionPath,
+                discoveredExecutables,
+                ["Pass an existing Visual Studio solution file."]);
         }
 
-        var process = System.Diagnostics.Process.Start(new ProcessStartInfo(executable)
+        if (executablePath is null || !File.Exists(executablePath))
         {
-            UseShellExecute = true,
-            Arguments = $"\"{solution}\""
-        }) ?? throw new InvalidOperationException("Visual Studio did not start.");
+            return OpenVisualStudioFailure(
+                "VisualStudioExecutableNotFound",
+                executableWasAutoDiscovered
+                    ? "Visual Studio could not be discovered automatically."
+                    : "The provided Visual Studio executable was not found.",
+                executableWasAutoDiscovered ? null : "visualStudioExecutable",
+                providedExecutable,
+                executablePath,
+                solution,
+                solutionPath,
+                discoveredExecutables,
+                [
+                    "Locate devenv.exe with Visual Studio Installer's vswhere.exe or under a Microsoft Visual Studio\\<version>\\<edition>\\Common7\\IDE directory.",
+                    "Retry with open_visual_studio_with_exe_path using the discovered absolute path.",
+                    "If no installation exists, install Visual Studio or ask the user for its custom installation path."
+                ]);
+        }
+
+        if (!string.Equals(
+                Path.GetFileName(executablePath),
+                "devenv.exe",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return OpenVisualStudioFailure(
+                "InvalidVisualStudioExecutable",
+                "The executable path must point to devenv.exe.",
+                "visualStudioExecutable",
+                providedExecutable,
+                executablePath,
+                solution,
+                solutionPath,
+                discoveredExecutables,
+                [
+                    "Locate Visual Studio's Common7\\IDE\\devenv.exe.",
+                    "Retry with open_visual_studio_with_exe_path using that absolute path."
+                ]);
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(executablePath)
+            {
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add(solutionPath);
+            using var process = System.Diagnostics.Process.Start(startInfo);
+            if (process is null)
+            {
+                return OpenVisualStudioFailure(
+                    "LaunchReturnedNoProcess",
+                    "Windows accepted the launch request but returned no process.",
+                    null,
+                    providedExecutable,
+                    executablePath,
+                    solution,
+                    solutionPath,
+                    discoveredExecutables,
+                    ["Try launching devenv.exe with the solution manually to inspect OS or installation errors."]);
+            }
+
+            return new JsonObject
+            {
+                ["success"] = true,
+                ["started"] = true,
+                ["launchRequested"] = true,
+                ["processId"] = process.Id,
+                ["launchProcessId"] = process.Id,
+                ["visualStudioExecutable"] = executablePath,
+                ["visualStudioExecutableSource"] =
+                    executableWasAutoDiscovered ? "AutoDiscovered" : "Provided",
+                ["solutionPath"] = solutionPath,
+                ["solutionPattern"] = $"*{Path.GetFileName(solutionPath)}",
+                ["processIdMayChange"] = true,
+                ["nextAction"] =
+                    "Poll list_visual_studio_instances until the solution appears, then call " +
+                    "connect_to_visual_studio using the returned instance processId. Visual Studio " +
+                    "may hand off the launch and use a different process ID."
+            }.ToJsonString();
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or
+            FileNotFoundException or
+            DirectoryNotFoundException or
+            UnauthorizedAccessException)
+        {
+            return OpenVisualStudioFailure(
+                "LaunchFailed",
+                $"Windows could not launch Visual Studio: {exception.Message}",
+                null,
+                providedExecutable,
+                executablePath,
+                solution,
+                solutionPath,
+                discoveredExecutables,
+                [
+                    "Try launching the same devenv.exe and solution paths manually.",
+                    "Check that Visual Studio is installed correctly and the current user can execute it."
+                ],
+                exception.HResult);
+        }
+    }
+
+    private static string OpenVisualStudioFailure(
+        string errorCode,
+        string message,
+        string? invalidParameter,
+        string? executableProvidedPath,
+        string? executableResolvedPath,
+        string solutionProvidedPath,
+        string? solutionResolvedPath,
+        JsonArray discoveredExecutables,
+        string[] nextActions,
+        int? hResult = null)
+    {
+        var error = new JsonObject
+        {
+            ["code"] = errorCode,
+            ["message"] = message,
+            ["invalidParameter"] = invalidParameter
+        };
+        if (hResult is int value)
+        {
+            error["hResult"] = $"0x{value:X8}";
+        }
 
         return new JsonObject
         {
-            ["started"] = true,
-            ["processId"] = process.Id,
-            ["solutionPath"] = solution,
-            ["solutionPattern"] = $"*{Path.GetFileName(solution)}"
+            ["success"] = false,
+            ["started"] = false,
+            ["launchRequested"] = false,
+            ["error"] = error,
+            ["paths"] = new JsonObject
+            {
+                ["visualStudioExecutable"] = new JsonObject
+                {
+                    ["provided"] = executableProvidedPath,
+                    ["resolved"] = executableResolvedPath,
+                    ["exists"] =
+                        executableResolvedPath is not null && File.Exists(executableResolvedPath)
+                },
+                ["solutionPath"] = new JsonObject
+                {
+                    ["provided"] = solutionProvidedPath,
+                    ["resolved"] = solutionResolvedPath,
+                    ["exists"] =
+                        solutionResolvedPath is not null && File.Exists(solutionResolvedPath)
+                }
+            },
+            ["discoveredVisualStudioExecutables"] = discoveredExecutables,
+            ["nextActions"] = new JsonArray(
+                nextActions.Select(action => (JsonNode?)JsonValue.Create(action)).ToArray())
         }.ToJsonString();
+    }
+
+    private static string? ValidateAbsolutePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            NotSupportedException or
+            PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private static List<string> DiscoverVisualStudioExecutablePaths()
+    {
+        var executables = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void AddExecutable(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var fullPath = ValidateAbsolutePath(path.Trim());
+            if (fullPath is not null && File.Exists(fullPath) && seen.Add(fullPath))
+            {
+                executables.Add(fullPath);
+            }
+        }
+
+        var vswhereCandidates = new[]
+        {
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Microsoft Visual Studio",
+                "Installer",
+                "vswhere.exe"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "Microsoft Visual Studio",
+                "Installer",
+                "vswhere.exe")
+        };
+        foreach (var vswhere in vswhereCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            AddVsWhereResults(vswhere, latestOnly: true, AddExecutable);
+        }
+        foreach (var vswhere in vswhereCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            AddVsWhereResults(vswhere, latestOnly: false, AddExecutable);
+        }
+
+        foreach (var programFiles in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+        })
+        {
+            var visualStudioRoot = Path.Combine(programFiles, "Microsoft Visual Studio");
+            if (!Directory.Exists(visualStudioRoot))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (var versionDirectory in Directory
+                    .EnumerateDirectories(visualStudioRoot)
+                    .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    foreach (var editionDirectory in Directory
+                        .EnumerateDirectories(versionDirectory)
+                        .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
+                    {
+                        AddExecutable(Path.Combine(
+                            editionDirectory,
+                            "Common7",
+                            "IDE",
+                            "devenv.exe"));
+                    }
+                }
+            }
+            catch (Exception exception) when (
+                exception is UnauthorizedAccessException or IOException)
+            {
+                // Discovery is advisory; explicit path validation remains authoritative.
+            }
+        }
+
+        return executables;
+    }
+
+    private static void AddVsWhereResults(
+        string vswherePath,
+        bool latestOnly,
+        Action<string?> addExecutable)
+    {
+        if (!File.Exists(vswherePath))
+        {
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(vswherePath)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            if (latestOnly)
+            {
+                startInfo.ArgumentList.Add("-latest");
+            }
+
+            startInfo.ArgumentList.Add("-prerelease");
+            startInfo.ArgumentList.Add("-products");
+            startInfo.ArgumentList.Add("*");
+            startInfo.ArgumentList.Add("-requires");
+            startInfo.ArgumentList.Add("Microsoft.VisualStudio.Component.CoreEditor");
+            startInfo.ArgumentList.Add("-property");
+            startInfo.ArgumentList.Add("productPath");
+
+            using var process = System.Diagnostics.Process.Start(startInfo);
+            if (process is null)
+            {
+                return;
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(5000))
+            {
+                process.Kill(entireProcessTree: true);
+                return;
+            }
+
+            foreach (var line in output.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                addExecutable(line);
+            }
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception or
+            InvalidOperationException or
+            IOException or
+            UnauthorizedAccessException)
+        {
+            // Standard installation-directory discovery remains available.
+        }
+    }
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values)
+    {
+        return new JsonArray(
+            values.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray());
     }
 
     private static string GetState(JsonObject arguments)
@@ -131,11 +478,28 @@ internal static class VisualStudioOperations
             ?? GetSingleVisualStudioProcessId();
         if (processId is int selectedProcessId)
         {
-            var windowState = VisualStudioWindowInspector.Inspect(selectedProcessId);
-            if (windowState["hasBlockingDialog"]?.GetValue<bool>() == true)
+            if (!IsVisualStudioProcessRunning(selectedProcessId))
+            {
+                return GetStateFailure(
+                    "VisualStudioProcessNotRunning",
+                    $"Visual Studio process {selectedProcessId} is not running.",
+                    arguments,
+                    [
+                        "Call list_visual_studio_instances to discover current process IDs.",
+                        "Call connect_to_visual_studio with a returned processId or solutionPattern."
+                    ]);
+            }
+
+            if (TryInspectWindowState(
+                    selectedProcessId,
+                    out var windowState,
+                    out _) &&
+                windowState?["hasBlockingDialog"]?.GetValue<bool>() == true)
             {
                 return new JsonObject
                 {
+                    ["success"] = true,
+                    ["debuggerStateAvailable"] = false,
                     ["processId"] = selectedProcessId,
                     ["solutionPattern"] = arguments["solutionPattern"]?.GetValue<string>(),
                     ["automationAvailable"] = false,
@@ -147,7 +511,49 @@ internal static class VisualStudioOperations
             }
         }
 
-        return WithInstance(arguments, GetState);
+        try
+        {
+            return WithInstance(arguments, GetState);
+        }
+        catch (VisualStudioConnectionException exception)
+        {
+            string[] nextActions = exception.Code switch
+            {
+                "NoVisualStudioInstances" =>
+                [
+                    "Call open_visual_studio with absolute devenv.exe and solution paths.",
+                    "Then poll list_visual_studio_instances before connecting."
+                ],
+                "AmbiguousVisualStudioTarget" =>
+                [
+                    "Call list_visual_studio_instances.",
+                    "Call connect_to_visual_studio with one exact processId or solutionPattern."
+                ],
+                _ =>
+                [
+                    "Call list_visual_studio_instances to inspect the available targets.",
+                    "Call connect_to_visual_studio again with a returned processId or matching solutionPattern."
+                ]
+            };
+            return GetStateFailure(
+                exception.Code,
+                exception.Message,
+                arguments,
+                nextActions);
+        }
+        catch (COMException exception)
+        {
+            return GetStateFailure(
+                "VisualStudioAutomationUnavailable",
+                $"Visual Studio did not accept the EnvDTE state request: {exception.Message}",
+                arguments,
+                [
+                    "Retry get_visual_studio_state; Visual Studio may be temporarily busy.",
+                    "If a blocking dialog is visible, retry after resolving it.",
+                    "Call list_visual_studio_instances and reconnect if the process restarted."
+                ],
+                exception.HResult);
+        }
     }
 
     private static JsonNode GetState(VisualStudioInstance instance, JsonObject arguments)
@@ -167,6 +573,8 @@ internal static class VisualStudioOperations
 
         var state = new JsonObject
         {
+            ["success"] = true,
+            ["debuggerStateAvailable"] = true,
             ["processId"] = instance.ProcessId,
             ["solution"] = instance.Solution,
             ["buildState"] = dte.Solution.SolutionBuild.BuildState.ToString(),
@@ -185,7 +593,14 @@ internal static class VisualStudioOperations
 
         if (instance.ProcessId is int processId)
         {
-            state["windowState"] = VisualStudioWindowInspector.Inspect(processId);
+            if (TryInspectWindowState(processId, out var windowState, out var inspectionError))
+            {
+                state["windowState"] = windowState;
+            }
+            else
+            {
+                state["windowInspectionError"] = inspectionError;
+            }
         }
 
         if (mode == dbgDebugMode.dbgBreakMode)
@@ -194,6 +609,127 @@ internal static class VisualStudioOperations
         }
 
         return state;
+    }
+
+    private static string GetStateFailure(
+        string errorCode,
+        string message,
+        JsonObject arguments,
+        string[] nextActions,
+        int? hResult = null)
+    {
+        var error = new JsonObject
+        {
+            ["code"] = errorCode,
+            ["message"] = message
+        };
+        if (hResult is int value)
+        {
+            error["hResult"] = $"0x{value:X8}";
+        }
+
+        return new JsonObject
+        {
+            ["success"] = false,
+            ["debuggerStateAvailable"] = false,
+            ["automationAvailable"] = false,
+            ["error"] = error,
+            ["requestedTarget"] = new JsonObject
+            {
+                ["visualStudioProcessId"] =
+                    arguments["visualStudioProcessId"]?.GetValue<int>(),
+                ["solutionPattern"] =
+                    arguments["solutionPattern"]?.GetValue<string>()
+            },
+            ["availableInstances"] = GetAvailableInstances(),
+            ["runningVisualStudioProcesses"] = GetRunningVisualStudioProcesses(),
+            ["nextActions"] = new JsonArray(
+                nextActions.Select(action => (JsonNode?)JsonValue.Create(action)).ToArray())
+        }.ToJsonString();
+    }
+
+    private static JsonArray GetAvailableInstances()
+    {
+        try
+        {
+            return new JsonArray(
+                VsConnection.GetAll().Select(instance => (JsonNode?)new JsonObject
+                {
+                    ["processId"] = instance.ProcessId,
+                    ["solution"] = instance.Solution,
+                    ["moniker"] = instance.Moniker
+                }).ToArray());
+        }
+        catch (Exception exception) when (
+            exception is COMException or InvalidOperationException)
+        {
+            return [];
+        }
+    }
+
+    private static JsonArray GetRunningVisualStudioProcesses()
+    {
+        var processes = new JsonArray();
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("devenv"))
+        {
+            using (process)
+            {
+                try
+                {
+                    processes.Add(new JsonObject
+                    {
+                        ["processId"] = process.Id,
+                        ["mainWindowTitle"] = process.MainWindowTitle,
+                        ["responding"] = process.Responding
+                    });
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process exited while its diagnostic details were being read.
+                }
+            }
+        }
+
+        return processes;
+    }
+
+    private static bool IsVisualStudioProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited &&
+                string.Equals(
+                    process.ProcessName,
+                    "devenv",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryInspectWindowState(
+        int processId,
+        out JsonObject? windowState,
+        out string? error)
+    {
+        try
+        {
+            windowState = VisualStudioWindowInspector.Inspect(processId);
+            error = null;
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidOperationException or
+            COMException)
+        {
+            windowState = null;
+            error = exception.Message;
+            return false;
+        }
     }
 
     private static JsonNode ClickDialogButton(JsonObject arguments)
