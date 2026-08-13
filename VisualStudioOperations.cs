@@ -16,7 +16,10 @@ internal static class VisualStudioOperations
     private const int ExpressionTimeoutMilliseconds = 5000;
 
     public static bool UsesEnvDte(JsonObject request) =>
-        request["operation"]?.GetValue<string>() is not ("start_visual_studio" or "get_port_status");
+        request["operation"]?.GetValue<string>() is not (
+            "open_visual_studio" or
+            "get_port_status" or
+            "click_dialog_button");
 
     public static string Execute(JsonObject request)
     {
@@ -27,13 +30,14 @@ internal static class VisualStudioOperations
         return operation switch
         {
             "list_instances" => ListInstances(),
-            "start_visual_studio" => StartVisualStudio(arguments),
-            "get_state" => WithInstance(arguments, GetState),
+            "open_visual_studio" => OpenVisualStudio(arguments),
+            "get_state" => GetState(arguments),
             "apply_debugger_settings" => WithInstance(arguments, ApplyDebuggerSettings),
             "start_build" => WithInstance(arguments, StartBuild),
             "get_build_status" => WithInstance(arguments, GetBuildStatus),
             "start_debugging" => WithInstance(arguments, StartDebugging),
             "get_port_status" => GetPortStatus(arguments).ToJsonString(),
+            "click_dialog_button" => ClickDialogButton(arguments).ToJsonString(),
             "stop_debugging" => WithInstance(arguments, StopDebugging),
             "close_visual_studio" => WithInstance(arguments, CloseVisualStudio),
             "set_breakpoint" => WithInstance(arguments, SetBreakpoint),
@@ -92,7 +96,7 @@ internal static class VisualStudioOperations
         return new JsonObject { ["instances"] = instances }.ToJsonString();
     }
 
-    private static string StartVisualStudio(JsonObject arguments)
+    private static string OpenVisualStudio(JsonObject arguments)
     {
         var executable = RequiredString(arguments, "visualStudioExecutable");
         var solution = RequiredString(arguments, "solutionPath");
@@ -121,6 +125,31 @@ internal static class VisualStudioOperations
         }.ToJsonString();
     }
 
+    private static string GetState(JsonObject arguments)
+    {
+        var processId = arguments["visualStudioProcessId"]?.GetValue<int>()
+            ?? GetSingleVisualStudioProcessId();
+        if (processId is int selectedProcessId)
+        {
+            var windowState = VisualStudioWindowInspector.Inspect(selectedProcessId);
+            if (windowState["hasBlockingDialog"]?.GetValue<bool>() == true)
+            {
+                return new JsonObject
+                {
+                    ["processId"] = selectedProcessId,
+                    ["solutionPattern"] = arguments["solutionPattern"]?.GetValue<string>(),
+                    ["automationAvailable"] = false,
+                    ["isBlocked"] = true,
+                    ["blockReason"] = "ModalDialog",
+                    ["recoveryTool"] = "click_visual_studio_dialog_button",
+                    ["windowState"] = windowState
+                }.ToJsonString();
+            }
+        }
+
+        return WithInstance(arguments, GetState);
+    }
+
     private static JsonNode GetState(VisualStudioInstance instance, JsonObject arguments)
     {
         var dte = instance.Dte;
@@ -142,6 +171,8 @@ internal static class VisualStudioOperations
             ["solution"] = instance.Solution,
             ["buildState"] = dte.Solution.SolutionBuild.BuildState.ToString(),
             ["lastBuildFailedProjects"] = lastBuildFailedProjects,
+            ["automationAvailable"] = true,
+            ["isBlocked"] = false,
             ["debugMode"] = mode switch
             {
                 dbgDebugMode.dbgBreakMode => "Break",
@@ -152,12 +183,45 @@ internal static class VisualStudioOperations
             ["statusText"] = dte.StatusBar.Text
         };
 
+        if (instance.ProcessId is int processId)
+        {
+            state["windowState"] = VisualStudioWindowInspector.Inspect(processId);
+        }
+
         if (mode == dbgDebugMode.dbgBreakMode)
         {
             state["breakReason"] = debugger.LastBreakReason.ToString();
         }
 
         return state;
+    }
+
+    private static JsonNode ClickDialogButton(JsonObject arguments)
+    {
+        var processId = arguments["visualStudioProcessId"]?.GetValue<int>()
+            ?? GetSingleVisualStudioProcessId()
+            ?? throw new InvalidOperationException(
+                "Select a Visual Studio process before interacting with a dialog.");
+        return VisualStudioWindowInspector.ClickButton(
+            processId,
+            RequiredString(arguments, "buttonName"),
+            arguments["dialogTitle"]?.GetValue<string>());
+    }
+
+    private static int? GetSingleVisualStudioProcessId()
+    {
+        var processes = System.Diagnostics.Process.GetProcessesByName("devenv");
+        try
+        {
+            return processes.Length == 1 ? processes[0].Id : null;
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     private static JsonNode ApplyDebuggerSettings(

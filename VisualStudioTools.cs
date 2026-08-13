@@ -23,18 +23,22 @@ internal sealed class VisualStudioTools
         CancellationToken ct = default)
     {
         client.SetTarget(solutionPattern, visualStudioProcessId);
-        return await client.InvokeAsync("get_state", cancellationToken: ct);
+        var state = await client.InvokeAsync("get_state", cancellationToken: ct);
+        var resolvedProcessId =
+            JsonNode.Parse(state)?["processId"]?.GetValue<int>() ?? visualStudioProcessId;
+        client.SetTarget(solutionPattern, resolvedProcessId);
+        return state;
     }
 
-    [McpServerTool(Name = "start_visual_studio")]
-    [Description("Starts Visual Studio with a solution and returns immediately.")]
-    public static Task<string> StartVisualStudio(
+    [McpServerTool(Name = "open_visual_studio")]
+    [Description("Opens Visual Studio with a solution and returns immediately.")]
+    public static Task<string> OpenVisualStudio(
         WorkerClient client,
         [Description("Absolute path to devenv.exe.")] string visualStudioExecutable,
         [Description("Absolute path to a .sln or .slnx file.")] string solutionPath,
         CancellationToken ct = default)
         => client.InvokeAsync(
-            "start_visual_studio",
+            "open_visual_studio",
             new JsonObject
             {
                 ["visualStudioExecutable"] = visualStudioExecutable,
@@ -56,9 +60,29 @@ internal sealed class VisualStudioTools
             cancellationToken: ct);
 
     [McpServerTool(Name = "get_visual_studio_state", ReadOnly = true)]
-    [Description("Returns solution, build state, debugger mode, break reason, and status-bar text.")]
+    [Description(
+        "Returns solution, build state, debugger mode, break reason, status-bar text, and any " +
+        "blocking Visual Studio modal dialog with its text and available buttons.")]
     public static Task<string> GetState(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("get_state", cancellationToken: ct);
+
+    [McpServerTool(Name = "click_visual_studio_dialog_button")]
+    [Description(
+        "Clicks an enabled button on the blocking Visual Studio modal dialog reported by " +
+        "get_visual_studio_state. Use an exact dialog title when more than one dialog is reported.")]
+    public static Task<string> ClickDialogButton(
+        WorkerClient client,
+        [Description("Visible button name, such as OK, Continue, or Cancel.")] string buttonName,
+        [Description("Optional exact dialog title.")] string? dialogTitle = null,
+        CancellationToken ct = default) =>
+        client.InvokeAsync(
+            "click_dialog_button",
+            new JsonObject
+            {
+                ["buttonName"] = buttonName,
+                ["dialogTitle"] = dialogTitle
+            },
+            cancellationToken: ct);
 
     [McpServerTool(Name = "start_build")]
     [Description("Starts building the selected solution through Visual Studio and returns immediately.")]

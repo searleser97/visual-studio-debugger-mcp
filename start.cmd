@@ -3,10 +3,10 @@ set SCRIPT_DIR=%~dp0
 set INSTALLED_EXE=%LOCALAPPDATA%\VisualStudioDebuggerMcp\VisualStudioDebuggerMcp.exe
 set SOURCE_EXE=%SCRIPT_DIR%bin\Release\net8.0-windows\VisualStudioDebuggerMcp.exe
 
-if exist "%INSTALLED_EXE%" (
-  set EXE=%INSTALLED_EXE%
-) else (
+if exist "%SOURCE_EXE%" (
   set EXE=%SOURCE_EXE%
+) else (
+  set EXE=%INSTALLED_EXE%
 )
 
 if not exist "%EXE%" (

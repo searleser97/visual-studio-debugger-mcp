@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
     <PackageReference Include="ModelContextProtocol" Version="0.1.0-preview.10" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="EnvDTE" Version="17.5.33422.76" />

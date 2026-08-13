@@ -36,9 +36,10 @@ building from source:
 .\install.ps1
 ```
 
-The repository's `start.cmd` automatically prefers the installed executable under
-`%LOCALAPPDATA%\VisualStudioDebuggerMcp`, falling back to a source-built Release executable. The
-machine must have the .NET 8 runtime and Visual Studio installed.
+The repository's `start.cmd` automatically prefers the source-built Release executable, falling
+back to an installed executable under `%LOCALAPPDATA%\VisualStudioDebuggerMcp`. This ensures local
+source changes are used after rebuilding. The machine must have the .NET 8 Desktop Runtime and
+Visual Studio installed.
 
 Maintainers create a release by pushing a `v*` tag. The release workflow publishes the complete
 runtime directory; generated `bin/` output remains excluded from source control.

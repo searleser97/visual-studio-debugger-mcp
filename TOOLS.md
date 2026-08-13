@@ -6,7 +6,7 @@ generic usage sequences; it is not a second schema source.
 ## Open and connect
 
 ```text
-start_visual_studio(
+open_visual_studio(
   visualStudioExecutable="C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\devenv.exe",
   solutionPath="C:\repos\sample\Sample.sln")
 ```
@@ -44,6 +44,23 @@ get_port_status(ports=[5000])
 
 Poll from the client until the requested state is reached. This keeps every MCP request short and
 avoids transport deadlines.
+
+`get_visual_studio_state` also inspects Visual Studio's native window state before calling EnvDTE.
+When a modal dialog blocks automation, it returns `automationAvailable=false`, `isBlocked=true`,
+`blockReason="ModalDialog"`, and `windowState.blockingDialogs` with the dialog title, message text,
+and available buttons. This lets callers identify and resolve prompts such as unsupported Hot
+Reload or exception dialogs without waiting for an EnvDTE timeout.
+
+After inspecting the reported choices, callers can resolve a prompt explicitly:
+
+```text
+click_visual_studio_dialog_button(
+  dialogTitle="Hot Reload",
+  buttonName="OK")
+```
+
+The tool only invokes an enabled button with the requested visible name; it does not guess or
+automatically accept dialogs.
 
 `stop_debugging`, `pause_execution`, and the three stepping tools also return after initiating the
 action. Poll `get_visual_studio_state` before issuing the next debugger command.
