@@ -202,12 +202,16 @@ internal sealed class VisualStudioTools
         client.InvokeAsync("list_breakpoints", cancellationToken: ct);
 
     [McpServerTool(Name = "get_stack_trace", ReadOnly = true)]
-    [Description("Returns the current thread's stack frames while Visual Studio is paused.")]
+    [Description(
+        "Returns the current thread's stack frames. Call get_visual_studio_state first and use " +
+        "only when debugMode is Break.")]
     public static Task<string> GetStackTrace(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("get_stack_trace", cancellationToken: ct);
 
     [McpServerTool(Name = "get_variables", ReadOnly = true)]
-    [Description("Returns local variables for a selected stack frame while paused.")]
+    [Description(
+        "Returns local variables for a selected stack frame. Call get_visual_studio_state first " +
+        "and use only when debugMode is Break.")]
     public static Task<string> GetVariables(
         WorkerClient client,
         [Description("1-based stack frame index.")] int frameIndex = 1,
@@ -218,7 +222,9 @@ internal sealed class VisualStudioTools
             cancellationToken: ct);
 
     [McpServerTool(Name = "evaluate_expression", ReadOnly = true)]
-    [Description("Evaluates a C# expression in the current debugger context while paused.")]
+    [Description(
+        "Evaluates a C# expression in the current debugger context. Call get_visual_studio_state " +
+        "first and use only when debugMode is Break.")]
     public static Task<string> EvaluateExpression(
         WorkerClient client,
         string expression,
@@ -231,14 +237,16 @@ internal sealed class VisualStudioTools
     [McpServerTool(Name = "get_current_exception", ReadOnly = true)]
     [Description(
         "Inspects the exception associated with the current stop, including type, message, " +
-        "stack trace, and inner exception.")]
+        "stack trace, and inner exception. Call get_visual_studio_state first and use only when " +
+        "debugMode is Break.")]
     public static Task<string> GetCurrentException(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("get_current_exception", cancellationToken: ct);
 
     [McpServerTool(Name = "inspect", ReadOnly = true)]
     [Description(
         "Returns debugger state, stack trace, locals, current exception, and requested expression " +
-        "evaluations in one call. Can optionally continue after capturing the snapshot.")]
+        "evaluations in one call. Call get_visual_studio_state first and use only when debugMode " +
+        "is Break. Can optionally continue after capturing the snapshot.")]
     public static Task<string> Inspect(
         WorkerClient client,
         [Description("Expressions to evaluate in the current debugger context.")] string[]? expressions = null,
@@ -260,7 +268,9 @@ internal sealed class VisualStudioTools
             cancellationToken: ct);
 
     [McpServerTool(Name = "continue_execution")]
-    [Description("Continues execution from the current debugger stop.")]
+    [Description(
+        "Continues execution from the current debugger stop. Call get_visual_studio_state first " +
+        "and use only when debugMode is Break.")]
     public static Task<string> Continue(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("continue", cancellationToken: ct);
 
@@ -270,17 +280,23 @@ internal sealed class VisualStudioTools
         client.InvokeAsync("pause", cancellationToken: ct);
 
     [McpServerTool(Name = "step_over")]
-    [Description("Initiates Step Over and returns immediately.")]
+    [Description(
+        "Initiates Step Over and returns immediately. Call get_visual_studio_state first and use " +
+        "only when debugMode is Break.")]
     public static Task<string> StepOver(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("step_over", cancellationToken: ct);
 
     [McpServerTool(Name = "step_into")]
-    [Description("Initiates Step Into and returns immediately.")]
+    [Description(
+        "Initiates Step Into and returns immediately. Call get_visual_studio_state first and use " +
+        "only when debugMode is Break.")]
     public static Task<string> StepInto(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("step_into", cancellationToken: ct);
 
     [McpServerTool(Name = "step_out")]
-    [Description("Initiates Step Out and returns immediately.")]
+    [Description(
+        "Initiates Step Out and returns immediately. Call get_visual_studio_state first and use " +
+        "only when debugMode is Break.")]
     public static Task<string> StepOut(WorkerClient client, CancellationToken ct) =>
         client.InvokeAsync("step_out", cancellationToken: ct);
 

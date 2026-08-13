@@ -28,7 +28,9 @@ builder.Services
             "report and resolve blocking modal dialogs, evaluate expressions, inspect exceptions, step, " +
             "continue, pause, attach, and stop. Long-running " +
             "state changes are initiated asynchronously and observed through short status probes. Every " +
-            "EnvDTE operation runs in an isolated timeout-bounded worker process.";
+            "EnvDTE operation runs in an isolated timeout-bounded worker process. Before inspecting, " +
+            "evaluating, continuing, or stepping, call get_visual_studio_state and proceed only when " +
+            "debugMode is Break; breakReason identifies why execution paused.";
     })
     .WithStdioServerTransport()
     .WithTools<VisualStudioTools>();

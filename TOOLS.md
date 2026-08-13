@@ -65,6 +65,10 @@ automatically accept dialogs.
 `stop_debugging`, `pause_execution`, and the three stepping tools also return after initiating the
 action. Poll `get_visual_studio_state` before issuing the next debugger command.
 
+Inspection, expression evaluation, exception inspection, continue, and stepping require
+`debugMode="Break"`. Always call `get_visual_studio_state` first; `breakReason` distinguishes a
+source breakpoint from an exception, completed step, manual break, or other debugger stop.
+
 ## Breakpoint workflow
 
 ```text
